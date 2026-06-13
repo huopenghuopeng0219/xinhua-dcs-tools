@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+Lib/
+Scripts/
+
+# IDE
+.idea/
+.vscode/
+
+# Output files
+*.xlsx
+*.xls
+*.xlsm
+~$*
+
+# Test files
+test_*.py
+test_*.xlsx
+fix_cf*.py
+
+# Temporary files
+*.tmp
+*.bak
+
+# Archive folders
+第一版归档/
+第二版归档/

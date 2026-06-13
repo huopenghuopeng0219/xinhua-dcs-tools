@@ -1,0 +1,371 @@
+Sub 生成并填充接线总表()
+    Dim ws As Worksheet, azWs As Worksheet
+    Dim targetRow As Long, currentRow As Long
+    Dim dpuValue As String, stationValue As String
+    Dim fillRows As Integer, signalType As String
+    Dim gValue As String, hValue As String
+    Dim blockCount As Integer, channel As Integer, colIndex As Integer
+    Dim ah72Value As String, col18Value As String, oValue As String, pValue As String
+    Dim currentRange As Range, doSourceCell As Range
+    Dim targetColumns As Variant
+    Dim hasData As Boolean
+    
+    ' 初始化目标列
+    targetColumns = Array(Array(12, "L"), Array(19, "S"), Array(26, "Z"), Array(36, "AJ"), Array(43, "AQ"), Array(50, "AX"))
+    
+    Application.ScreenUpdating = False
+    hasData = False
+    
+    ' 生成表头
+    Call 生成接线总表表头
+    Set ws = ThisWorkbook.Worksheets("接线总表")
+    targetRow = 2
+    
+    ' 遍历所有-AZ工作表
+    For Each azWs In ThisWorkbook.Worksheets
+        If Right(LCase(azWs.Name), 3) = "-az" Then
+            Debug.Print "处理工作表: " & azWs.Name
+            
+            ' 遍历每个目标列
+            For colIndex = LBound(targetColumns) To UBound(targetColumns)
+                Dim colNum As Integer: colNum = targetColumns(colIndex)(0)
+                Dim colName As String: colName = targetColumns(colIndex)(1)
+                
+                ' 检查列20是否有值
+                If azWs.Cells(20, colNum).Value = "" Then
+                    Debug.Print "  跳过" & colName & "列：行20为空"
+                    GoTo NextColumn
+                End If
+                
+                ' 提取基础数据
+                ah72Value = azWs.Cells(72, 34).Value
+                col18Value = azWs.Cells(18, colNum).Value
+                Call GetDPUAndStation(azWs.Cells(20, colNum).Value, dpuValue, stationValue)
+                
+                blockCount = 0
+                currentRow = 22
+                
+                ' 扫描3列4行数据块
+                Do While currentRow <= 63
+                    On Error Resume Next
+                    Set currentRange = azWs.Cells(currentRow, colNum)
+                    On Error GoTo 0
+                    
+                    ' 检查是否为有效数据块
+                    If Not currentRange Is Nothing Then
+                        If currentRange.mergeArea.Columns.Count = 3 And _
+                           currentRange.mergeArea.Rows.Count = 4 And _
+                           currentRange.mergeArea.Columns(1).Column = colNum Then
+                           
+                            blockCount = blockCount + 1
+                            Call GetFillRowsAndType(azWs, currentRange.mergeArea, fillRows, signalType)
+                            
+                            If fillRows > 0 And signalType <> "" Then
+                                ' 处理DO信号源
+                                If colNum - 3 >= 1 Then ' 防止列越界
+                                    Set doSourceCell = azWs.Cells(currentRow + 1, colNum - 3)
+                                Else
+                                    Debug.Print "  列越界：" & colName & "列-3超出有效范围"
+                                    currentRow = currentRow + 4
+                                    GoTo ContinueLoop
+                                End If
+                                
+                                ' 填充数据
+                                For channel = 0 To fillRows - 1
+                                    oValue = col18Value & blockCount
+                                    
+                                    If signalType = "DO" Then
+                                        pValue = doSourceCell.Value
+                                    Else
+                                        pValue = oValue
+                                    End If
+                                    
+                                    gValue = signalType
+                                    hValue = GetHColumnValue(signalType, azWs, pValue)
+                                    
+                                    ' 写入数据
+                                    ws.Cells(targetRow, 3) = dpuValue
+                                    ws.Cells(targetRow, 4) = stationValue
+                                    ws.Cells(targetRow, 5) = blockCount
+                                    ws.Cells(targetRow, 6) = channel
+                                    ws.Cells(targetRow, 7) = gValue ' G列：卡件类型
+                                    ws.Cells(targetRow, 8) = hValue ' H列：测点类型
+                                    ws.Cells(targetRow, 9) = "DCS"
+                                    ws.Cells(targetRow, 13) = ah72Value
+                                    ws.Cells(targetRow, 14) = Get正反面(oValue)
+                                    ws.Cells(targetRow, 15) = oValue
+                                    ws.Cells(targetRow, 16) = pValue
+                                    
+                                    ' 新增J列内容（第10列）：温度单位
+                                    If gValue = "TC" Or gValue = "RTD" Then
+                                        ws.Cells(targetRow, 10) = "℃"
+                                    Else
+                                        ws.Cells(targetRow, 10) = ""
+                                    End If
+                                    
+                                    ' 新增K列内容（第11列）：下限值
+                                    Select Case hValue
+                                        Case "Pt100"
+                                            ws.Cells(targetRow, 11) = -50
+                                        Case "TC-K"
+                                            ws.Cells(targetRow, 11) = 0
+                                        Case Else
+                                            ws.Cells(targetRow, 11) = ""
+                                    End Select
+                                    
+                                    ' 新增L列内容（第12列）：上限值
+                                    Select Case hValue
+                                        Case "Pt100"
+                                            ws.Cells(targetRow, 12) = 500
+                                        Case "TC-K"
+                                            ws.Cells(targetRow, 12) = 1232
+                                        Case Else
+                                            ws.Cells(targetRow, 12) = ""
+                                    End Select
+                                    
+                                    targetRow = targetRow + 1
+                                    hasData = True
+                                Next channel
+                            End If
+                            currentRow = currentRow + 4
+                        Else
+                            currentRow = currentRow + 1
+                        End If
+                    Else
+                        currentRow = currentRow + 1
+                    End If
+ContinueLoop:
+                Loop
+NextColumn:
+            Next colIndex
+        End If
+    Next azWs
+    
+    ' 设置对齐方式和字体
+    Call 设置表格格式(ws, targetRow - 1)
+    
+    ' 格式化与提示
+    If hasData Then
+        ws.Range("A1:P" & targetRow - 1).Borders.LineStyle = xlContinuous
+        MsgBox "接线总表生成完成！共填充 " & targetRow - 2 & " 条有效数据。", vbInformation
+    Else
+        MsgBox "未生成任何数据，请检查-AZ工作表是否包含有效数据块。", vbExclamation
+    End If
+    
+    Application.ScreenUpdating = True
+    ws.Activate
+End Sub
+
+' 生成表头过程
+Sub 生成接线总表表头()
+    Dim ws As Worksheet, i As Integer
+    Dim headers As Variant, colWidths As Variant
+    
+    ' 重建表头（避免格式问题）
+    On Error Resume Next
+    Set ws = ThisWorkbook.Worksheets("接线总表")
+    If Not ws Is Nothing Then ws.Delete
+    On Error GoTo 0
+    
+    Set ws = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
+    ws.Name = "接线总表"
+    
+    ' 表头内容和列宽
+    headers = Array("测点名", "中文描述", "DPU", "站号", "卡号", "卡通道号", _
+                   "卡件类型", "测点类型", "特征字", "单位", "下限", "上限", _
+                   "端子柜号", "正反面", "端子板号", "DO端子板号")
+    colWidths = Array(20, 30, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 15, 5, 5, 5)
+    
+    For i = 0 To 15
+        ws.Cells(1, i + 1).Value = headers(i)
+        ws.Cells(1, i + 1).ColumnWidth = colWidths(i)
+        ws.Cells(1, i + 1).Font.Bold = True
+        ws.Cells(1, i + 1).Font.Size = 11 ' 设置11号字体
+        ws.Cells(1, i + 1).HorizontalAlignment = xlCenter
+        ws.Cells(1, i + 1).VerticalAlignment = xlCenter ' 表头上下居中
+        ws.Cells(1, i + 1).WrapText = True
+    Next i
+    
+    ws.Rows(1).RowHeight = 32
+    ws.Range("A2").Activate
+    ActiveWindow.FreezePanes = True
+End Sub
+
+' 新增：设置表格格式（包含所有文字上下居中）
+Sub 设置表格格式(ws As Worksheet, lastRow As Long)
+    Dim dataRange As Range
+    
+    ' 如果没有数据，直接返回
+    If lastRow < 2 Then Exit Sub
+    
+    ' 设置整个数据区域字体为11号并上下居中
+    Set dataRange = ws.Range("A1:P" & lastRow)
+    With dataRange
+        .Font.Size = 11
+        .VerticalAlignment = xlCenter ' 所有文字上下居中
+    End With
+    
+    ' A列和B列从第2行开始左对齐
+    ws.Range("A2:B" & lastRow).HorizontalAlignment = xlLeft
+    
+    ' 其他列（C列到P列）从第2行开始居中对齐
+    ws.Range("C2:P" & lastRow).HorizontalAlignment = xlCenter
+    
+    ' 设置表头对齐方式（确保表头居中）
+    ws.Range("A1:P1").HorizontalAlignment = xlCenter
+End Sub
+
+' H列填充逻辑
+Function GetHColumnValue(signalType As String, azWs As Worksheet, pValue As String) As String
+    Select Case signalType
+        Case "DI", "SOE", "AI", "AO", "PI"
+            GetHColumnValue = signalType
+        Case "RTD"
+            GetHColumnValue = "Pt100"
+        Case "TC"
+            GetHColumnValue = "TC-K"
+        Case "DO"
+            ' 检查pValue不为空时才进行匹配
+            If pValue <> "" And IsDOTKMatch(azWs, pValue) Then
+                GetHColumnValue = "DOTK"
+            Else
+                GetHColumnValue = "DO"
+            End If
+        Case Else
+            GetHColumnValue = ""
+    End Select
+End Function
+
+' DOTK匹配判断（搜索范围为整个表格）
+Function IsDOTKMatch(azWs As Worksheet, pValue As String) As Boolean
+    Dim checkRow As Long, checkCol As Long
+    Dim maxRow As Long, maxCol As Long
+    Dim checkRange As Range, cell As Range
+    Dim blockFirstTwoChars As String
+    
+    ' 获取整个工作表的有效范围
+    maxRow = azWs.UsedRange.Rows(azWs.UsedRange.Rows.Count).Row
+    maxCol = azWs.UsedRange.Columns(azWs.UsedRange.Columns.Count).Column
+    
+    ' 确保不超过Excel最大行列限制
+    If maxRow > 1048576 Then maxRow = 1048576
+    If maxCol > 16384 Then maxCol = 16384
+    
+    ' 遍历整个工作表查找3列16行块
+    For checkRow = 1 To maxRow
+        ' 确保有足够空间容纳16行块
+        If checkRow + 15 > maxRow Then Exit For
+        
+        For checkCol = 1 To maxCol
+            ' 确保有足够空间容纳3列块
+            If checkCol + 2 > maxCol Then Exit For
+            
+            On Error Resume Next
+            Set checkRange = azWs.Cells(checkRow, checkCol).mergeArea
+            On Error GoTo 0
+            
+            ' 检查是否为3列16行合并块
+            If Not checkRange Is Nothing Then
+                If checkRange.Columns.Count = 3 And _
+                   checkRange.Rows.Count = 16 And _
+                   checkRange.Row = checkRow And _
+                   checkRange.Column = checkCol Then
+                   
+                    ' 在块内搜索DOTK文本
+                    For Each cell In checkRange.Cells
+                        If InStr(1, LCase(cell.Value), "dotk", vbTextCompare) > 0 Then
+                            ' 提取块内第一个非空单元格的前两个字符
+                            blockFirstTwoChars = GetFirstTwoChars(checkRange)
+                            
+                            ' 比较字符
+                            If LCase(Left(pValue, 2)) = LCase(blockFirstTwoChars) Then
+                                IsDOTKMatch = True
+                                Exit Function
+                            End If
+                            Exit For ' 找到DOTK后无需继续检查该块
+                        End If
+                    Next cell
+                End If
+            End If
+        Next checkCol
+    Next checkRow
+    
+    IsDOTKMatch = False
+End Function
+
+' 提取块内最前面两个字符
+Function GetFirstTwoChars(mergeArea As Range) As String
+    Dim cell As Range
+    Dim firstNonEmpty As String
+    
+    ' 按行优先顺序查找第一个非空单元格
+    For Each cell In mergeArea.Cells
+        If cell.Value <> "" And Not IsEmpty(cell) Then
+            firstNonEmpty = Trim(CStr(cell.Value))
+            Exit For
+        End If
+    Next cell
+    
+    ' 提取前两个字符
+    If Len(firstNonEmpty) >= 2 Then
+        GetFirstTwoChars = Left(firstNonEmpty, 2)
+    Else
+        GetFirstTwoChars = firstNonEmpty
+    End If
+End Function
+
+' 正反面判断逻辑
+Function Get正反面(oValue As String) As String
+    Dim lowerO As String
+    lowerO = LCase(oValue)
+    If InStr(lowerO, "a") > 0 Or InStr(lowerO, "b") > 0 Or InStr(lowerO, "c") > 0 Then
+        Get正反面 = "正"
+    ElseIf InStr(lowerO, "d") > 0 Or InStr(lowerO, "e") > 0 Or InStr(lowerO, "f") > 0 Then
+        Get正反面 = "反"
+    Else
+        Get正反面 = ""
+    End If
+End Function
+
+' 获取填充行数和信号类型
+Sub GetFillRowsAndType(ws As Worksheet, mergeArea As Range, ByRef fillRows As Integer, ByRef signalType As String)
+    Dim signalTypes1 As Variant, signalTypes2 As Variant
+    Dim cell As Range, i As Integer
+    signalTypes1 = Array("DI", "DO", "SOE")
+    signalTypes2 = Array("AI", "AO", "PI", "RTD", "TC")
+    
+    fillRows = -1
+    signalType = ""
+    
+    ' 遍历所有单元格查找信号类型
+    For Each cell In mergeArea.Cells
+        If cell.Value <> "" Then
+            For i = LBound(signalTypes1) To UBound(signalTypes1)
+                If InStr(1, LCase(cell.Value), LCase(signalTypes1(i)), vbTextCompare) > 0 Then
+                    fillRows = 16
+                    signalType = signalTypes1(i)
+                    Exit Sub
+                End If
+            Next i
+            For i = LBound(signalTypes2) To UBound(signalTypes2)
+                If InStr(1, LCase(cell.Value), LCase(signalTypes2(i)), vbTextCompare) > 0 Then
+                    fillRows = 8
+                    signalType = signalTypes2(i)
+                    Exit Sub
+                End If
+            Next i
+        End If
+    Next cell
+End Sub
+
+' 解析DPU和站号
+Sub GetDPUAndStation(cellValue As String, ByRef dpu As String, ByRef station As String)
+    If InStr(cellValue, "-") > 0 Then
+        dpu = Split(cellValue, "-")(0)
+        station = Split(cellValue, "-")(1)
+    Else
+        dpu = cellValue
+        station = ""
+    End If
+End Sub
+    

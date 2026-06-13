@@ -1,0 +1,300 @@
+Sub 生成并填充接线总表()
+    Dim hpWs As Worksheet, hpAzWs As Worksheet
+    Dim hpTargetRow As Long, hpCurrentRow As Long
+    Dim hpDpuValue As String, hpStationValue As String
+    Dim hpFillRow As Integer, hpSignalType As String
+    Dim hpGValue As String, hpHValue As String
+    Dim hpBlockCount As Integer, hpChannel As Integer, hpColIndex As Integer
+    Dim hpAh72Value As String, hpCol18Value As String, hpOValue As String, hpPValue As String
+    Dim hpCurrentRange As Range, hpDoSourceCell As Range
+    Dim hpTargetColumns As Variant: hpTargetColumns = Array(Array(12, "L"), Array(19, "S"), Array(26, "Z"), Array(36, "AJ"), Array(43, "AQ"), Array(50, "AX"))
+    Dim hpHasData As Boolean: hpHasData = False
+    
+    Application.ScreenUpdating = False
+    
+    Call 生成接线总表表头
+    Set hpWs = ThisWorkbook.Worksheets("接线总表")
+    hpTargetRow = 2
+    
+    For Each hpAzWs In ThisWorkbook.Worksheets
+        If Right(LCase(hpAzWs.Name), 3) = "-az" Then
+            Debug.Print "处理工作表: " & hpAzWs.Name
+            
+            For hpColIndex = LBound(hpTargetColumns) To UBound(hpTargetColumns)
+                Dim hpColNum As Integer: hpColNum = hpTargetColumns(hpColIndex)(0)
+                Dim hpColName As String: hpColName = hpTargetColumns(hpColIndex)(1)
+                
+                If hpAzWs.Cells(20, hpColNum).Value = "" Then
+                    Debug.Print "  跳过" & hpColName & "列：行20为空"
+                    GoTo NextColumn
+                End If
+                
+                hpAh72Value = hpAzWs.Cells(72, 34).Value
+                hpCol18Value = hpAzWs.Cells(18, hpColNum).Value
+                Call GetDPUAndStation(hpAzWs.Cells(20, hpColNum).Value, hpDpuValue, hpStationValue)
+                
+                hpBlockCount = 0
+                hpCurrentRow = 22
+                
+                Do While hpCurrentRow <= 63
+                    On Error Resume Next
+                    Set hpCurrentRange = hpAzWs.Cells(hpCurrentRow, hpColNum)
+                    On Error GoTo 0
+                    
+                    If Not hpCurrentRange Is Nothing Then
+                        With hpCurrentRange.mergeArea
+                            If .Columns.Count = 3 And .Rows.Count = 4 And .Columns(1).Column = hpColNum Then
+                                hpBlockCount = hpBlockCount + 1
+                                Call GetFillRowsAndType(hpAzWs, .Cells, hpFillRow, hpSignalType)
+                                
+                                If hpFillRow > 0 And hpSignalType <> "" Then
+                                    If hpColNum - 3 >= 1 Then
+                                        Set hpDoSourceCell = hpAzWs.Cells(hpCurrentRow + 1, hpColNum - 3)
+                                    Else
+                                        Debug.Print "  列越界：" & hpColName & "列-3超出范围"
+                                        hpCurrentRow = hpCurrentRow + 4
+                                        GoTo ContinueLoop
+                                    End If
+                                    
+                                    For hpChannel = 0 To hpFillRow - 1
+                                        hpOValue = hpCol18Value & hpBlockCount
+                                        hpPValue = IIf(hpSignalType = "DO", hpDoSourceCell.Value, hpOValue)
+                                        hpGValue = hpSignalType
+                                        hpHValue = GetHColumnValue(hpSignalType, hpAzWs, hpPValue)
+                                        
+                                        hpWs.Cells(hpTargetRow, 3) = hpDpuValue
+                                        hpWs.Cells(hpTargetRow, 4) = hpStationValue
+                                        hpWs.Cells(hpTargetRow, 5) = hpBlockCount
+                                        hpWs.Cells(hpTargetRow, 6) = hpChannel
+                                        hpWs.Cells(hpTargetRow, 7) = hpGValue
+                                        hpWs.Cells(hpTargetRow, 8) = hpHValue
+                                        hpWs.Cells(hpTargetRow, 9) = "DCS"
+                                        hpWs.Cells(hpTargetRow, 13) = hpAh72Value
+                                        hpWs.Cells(hpTargetRow, 14) = Get正反面(hpOValue)
+                                        hpWs.Cells(hpTargetRow, 15) = hpOValue
+                                        hpWs.Cells(hpTargetRow, 16) = hpPValue
+                                        
+                                        hpWs.Cells(hpTargetRow, 10) = IIf(hpGValue = "TC" Or hpGValue = "RTD", "℃", "")
+                                        hpWs.Cells(hpTargetRow, 11) = IIf(hpHValue = "Pt100", -50, IIf(hpHValue = "TC-K", 0, ""))
+                                        hpWs.Cells(hpTargetRow, 12) = IIf(hpHValue = "Pt100", 500, IIf(hpHValue = "TC-K", 1232, ""))
+                                        
+                                        hpTargetRow = hpTargetRow + 1
+                                        hpHasData = True
+                                    Next hpChannel
+                                End If
+                                hpCurrentRow = hpCurrentRow + 4
+                            Else
+                                hpCurrentRow = hpCurrentRow + 1
+                            End If
+                        End With
+                    Else
+                        hpCurrentRow = hpCurrentRow + 1
+                    End If
+ContinueLoop:
+                Loop
+NextColumn:
+            Next hpColIndex
+        End If
+    Next hpAzWs
+    
+    Call 设置表格格式(hpWs, hpTargetRow - 1)
+    
+    If hpHasData Then
+        hpWs.Range("A1:P" & hpTargetRow - 1).Borders.LineStyle = xlContinuous
+        MsgBox "接线总表生成完成！共填充 " & hpTargetRow - 2 & " 条有效数据。", vbInformation
+    Else
+        MsgBox "未生成任何数据，请检查-AZ工作表是否包含有效数据块。", vbExclamation
+    End If
+    
+    Application.ScreenUpdating = True
+    hpWs.Activate
+End Sub
+
+Sub 生成接线总表表头()
+    Dim hpWs As Worksheet, hpI As Integer
+    Dim hpHeaders As Variant: hpHeaders = Array("测点名", "中文描述", "DPU", "站号", "卡号", "卡通道号", "卡件类型", "测点类型", "特征字", "单位", "下限", "上限", "端子柜号", "正反面", "端子板号", "DO端子板号")
+    Dim hpColWidths As Variant: hpColWidths = Array(20, 30, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 15, 5, 5, 5)
+    
+    On Error Resume Next
+    Set hpWs = ThisWorkbook.Worksheets("接线总表")
+    If Not hpWs Is Nothing Then hpWs.Delete
+    On Error GoTo 0
+    
+    Set hpWs = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
+    hpWs.Name = "接线总表"
+    
+    For hpI = 0 To 15
+        With hpWs.Cells(1, hpI + 1)
+            .Value = hpHeaders(hpI)
+            .ColumnWidth = hpColWidths(hpI)
+            .Font.Bold = True
+            .Font.Size = 11
+            .HorizontalAlignment = xlCenter
+            .VerticalAlignment = xlCenter
+            .WrapText = True
+        End With
+    Next hpI
+    
+    hpWs.Rows(1).RowHeight = 32
+    hpWs.Range("A2").Activate
+    ActiveWindow.FreezePanes = True
+End Sub
+
+Sub 设置表格格式(hpWs As Worksheet, hpLastRow As Long)
+    If hpLastRow < 2 Then Exit Sub
+    
+    With hpWs.Range("A1:P" & hpLastRow)
+        .Font.Size = 11
+        .VerticalAlignment = xlCenter
+    End With
+    hpWs.Range("A2:B" & hpLastRow).HorizontalAlignment = xlLeft
+    hpWs.Range("C2:P" & hpLastRow).HorizontalAlignment = xlCenter
+    
+    Dim hpFormatRange As Range, hpCf As FormatCondition
+    Dim hpConditionFormula As String, hpFormulaTest As String
+    
+    ' 范围改为整个工作表的所有行
+    Set hpFormatRange = hpWs.Range("$1:$1048576")
+    hpFormatRange.FormatConditions.Delete
+    
+    hpConditionFormula = "=OR(AND($F2=15,OR($G2=""DI"",$G2=""DO"",$G2=""SOE"")),AND($F2=7,OR($G2=""AI"",$G2=""AO"",$G2=""TC"",$G2=""RTD"",$G2=""PI"")))"
+    
+    On Error Resume Next
+    hpFormulaTest = hpWs.Evaluate(hpConditionFormula)
+    If Err.Number <> 0 Then
+        MsgBox "条件格式公式无效，错误代码：" & Err.Number & vbCrLf & "公式：" & hpConditionFormula, vbCritical
+        Err.Clear
+        Exit Sub
+    End If
+    On Error GoTo 0
+    
+    On Error Resume Next
+    Set hpCf = hpFormatRange.FormatConditions.Add( _
+        Type:=xlExpression, _
+        Formula1:=hpConditionFormula)
+    
+    If Not hpCf Is Nothing Then
+        With hpCf.Interior
+            .Pattern = xlPatternLinearGradient
+            ' 渐变角度改为90度（垂直方向）
+            .Gradient.Degree = 90
+            .Gradient.ColorStops.Clear
+        End With
+        
+        With hpCf.Interior.Gradient.ColorStops.Add(0)
+            .Color = RGB(255, 255, 255)
+            .TintAndShade = 0
+        End With
+        
+        With hpCf.Interior.Gradient.ColorStops.Add(1)
+            .Color = RGB(255, 255, 0)
+            .TintAndShade = 0
+        End With
+    Else
+        MsgBox "条件格式创建失败，已使用备用方案。", vbExclamation
+        With hpFormatRange.Interior
+            .Pattern = xlSolid
+            .Color = RGB(255, 255, 224)
+        End With
+    End If
+    On Error GoTo 0
+End Sub
+
+Function GetHColumnValue(hpSignalType As String, hpAzWs As Worksheet, hpPValue As String) As String
+    Select Case hpSignalType
+        Case "DI", "SOE", "AI", "AO", "PI": GetHColumnValue = hpSignalType
+        Case "RTD": GetHColumnValue = "Pt100"
+        Case "TC": GetHColumnValue = "TC-K"
+        Case "DO": GetHColumnValue = IIf(hpPValue <> "" And IsDOTKMatch(hpAzWs, hpPValue), "DOTK", "DO")
+        Case Else: GetHColumnValue = ""
+    End Select
+End Function
+
+Function IsDOTKMatch(hpAzWs As Worksheet, hpPValue As String) As Boolean
+    Dim hpCheckRow As Long, hpCheckCol As Long
+    Dim hpMaxRow As Long: hpMaxRow = hpAzWs.UsedRange.Rows(hpAzWs.UsedRange.Rows.Count).Row
+    Dim hpMaxCol As Long: hpMaxCol = hpAzWs.UsedRange.Columns(hpAzWs.UsedRange.Columns.Count).Column
+    Dim hpCheckRange As Range, hpCell As Range
+    Dim hpBlockFirstTwoChars As String
+    
+    For hpCheckRow = 1 To hpMaxRow - 15
+        For hpCheckCol = 1 To hpMaxCol - 2
+            On Error Resume Next
+            Set hpCheckRange = hpAzWs.Cells(hpCheckRow, hpCheckCol).mergeArea
+            On Error GoTo 0
+            
+            If Not hpCheckRange Is Nothing Then
+                With hpCheckRange
+                    If .Columns.Count = 3 And .Rows.Count = 16 And .Row = hpCheckRow And .Column = hpCheckCol Then
+                        For Each hpCell In .Cells
+                            If InStr(1, LCase(hpCell.Value), "dotk", vbTextCompare) > 0 Then
+                                hpBlockFirstTwoChars = GetFirstTwoChars(.Cells)
+                                If LCase(Left(hpPValue, 2)) = LCase(hpBlockFirstTwoChars) Then
+                                    IsDOTKMatch = True
+                                    Exit Function
+                                End If
+                                Exit For
+                            End If
+                        Next hpCell
+                    End If
+                End With
+            End If
+        Next hpCheckCol
+    Next hpCheckRow
+End Function
+
+Function GetFirstTwoChars(hpMergeArea As Range) As String
+    Dim hpCell As Range, hpFirstNonEmpty As String
+    For Each hpCell In hpMergeArea
+        If hpCell.Value <> "" And Not IsEmpty(hpCell) Then
+            hpFirstNonEmpty = Trim(CStr(hpCell.Value))
+            Exit For
+        End If
+    Next hpCell
+    GetFirstTwoChars = Left(hpFirstNonEmpty, 2)
+End Function
+
+Function Get正反面(hpOValue As String) As String
+    Dim hpLowerO As String: hpLowerO = LCase(hpOValue)
+    Get正反面 = IIf(InStr(hpLowerO, "a") Or InStr(hpLowerO, "b") Or InStr(hpLowerO, "c"), "正", _
+                IIf(InStr(hpLowerO, "d") Or InStr(hpLowerO, "e") Or InStr(hpLowerO, "f"), "反", ""))
+End Function
+
+Sub GetFillRowsAndType(hpWs As Worksheet, hpMergeArea As Range, ByRef hpFillRow As Integer, ByRef hpSignalType As String)
+    Dim hpSignalTypes1 As Variant: hpSignalTypes1 = Array("DI", "DO", "SOE")
+    Dim hpSignalTypes2 As Variant: hpSignalTypes2 = Array("AI", "AO", "PI", "RTD", "TC")
+    Dim hpCell As Range, hpI As Integer
+    
+    hpFillRow = -1
+    hpSignalType = ""
+    
+    For Each hpCell In hpMergeArea
+        If hpCell.Value <> "" Then
+            For hpI = LBound(hpSignalTypes1) To UBound(hpSignalTypes1)
+                If InStr(1, LCase(hpCell.Value), LCase(hpSignalTypes1(hpI)), vbTextCompare) > 0 Then
+                    hpFillRow = 16
+                    hpSignalType = hpSignalTypes1(hpI)
+                    Exit Sub
+                End If
+            Next hpI
+            For hpI = LBound(hpSignalTypes2) To UBound(hpSignalTypes2)
+                If InStr(1, LCase(hpCell.Value), LCase(hpSignalTypes2(hpI)), vbTextCompare) > 0 Then
+                    hpFillRow = 8
+                    hpSignalType = hpSignalTypes2(hpI)
+                    Exit Sub
+                End If
+            Next hpI
+        End If
+    Next hpCell
+End Sub
+
+Sub GetDPUAndStation(hpCellValue As String, ByRef hpDpu As String, ByRef hpStation As String)
+    If InStr(hpCellValue, "-") > 0 Then
+        hpDpu = Split(hpCellValue, "-")(0)
+        hpStation = Split(hpCellValue, "-")(1)
+    Else
+        hpDpu = hpCellValue
+        hpStation = ""
+    End If
+End Sub
+    

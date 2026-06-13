@@ -1,0 +1,64 @@
+' 1. 工作表计算事件：公式更新时触发
+Private Sub Worksheet_Calculate()
+    ' 当工作表中任何公式重新计算时，自动调用行检查逻辑（改为删除行）
+    CheckAndDeleteRows
+End Sub
+
+' 2. 工作表更改事件：手动修改F/G列时触发
+Private Sub Worksheet_Change(ByVal Target As Range)
+    If Not Intersect(Target, Me.Columns("F:G")) Is Nothing Then
+        CheckAndDeleteRows
+    End If
+End Sub
+
+' 3. 核心行检查逻辑（改为删除符合条件的行）
+Private Sub CheckAndDeleteRows()
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim huop As Long
+    Dim gVal As String
+    Dim fVal As Double
+    
+    Set ws = Me
+    Application.EnableEvents = False ' 关闭事件，防止循环触发
+    
+    ' 获取包含隐藏行的真正最后一行
+    lastRow = GetTrueLastRow(ws, "G")
+    
+    ' 注意：删除行需从最后一行向上遍历，否则会漏删（因行号会变化）
+    If lastRow >= 1 Then
+        For huop = lastRow To 1 Step -1 ' 从最后一行倒推到第1行
+            gVal = UCase(Trim(ws.Cells(huop, "G").Value))
+            fVal = Val(ws.Cells(huop, "F").Value)
+            
+            Dim needDelete As Boolean ' 改为判断是否需要删除
+            needDelete = False
+            
+            ' 条件判断（与原隐藏逻辑一致，符合为删除条件）
+            If gVal = "" Then
+                needDelete = True
+            ElseIf (gVal = "AI" Or gVal = "PI" Or gVal = "AO" Or gVal = "RTD" Or gVal = "TC") And (fVal >= 8 And fVal <= 15) Then
+                needDelete = True
+            ElseIf (gVal = "DI" Or gVal = "DO" Or gVal = "SOE") And (fVal >= 8 And fVal <= 15) Then
+                needDelete = False ' 不删除
+            End If
+            
+            ' 执行删除操作
+            If needDelete Then
+                ws.Rows(huop).Delete ' 删除当前行（下方行会自动上移）
+            End If
+        Next huop
+    End If
+    
+    Application.EnableEvents = True ' 恢复事件触发
+End Sub
+
+' 4. 自定义函数：获取真正最后一行（兼容隐藏行）
+Function GetTrueLastRow(ws As Worksheet, targetCol As String) As Long
+    Dim lastRowUsed As Long, lastRowVisible As Long
+    On Error Resume Next
+    lastRowUsed = ws.UsedRange.Rows(ws.UsedRange.Rows.Count).Row
+    lastRowVisible = ws.Cells(ws.Rows.Count, targetCol).End(xlUp).Row
+    GetTrueLastRow = IIf(lastRowUsed > lastRowVisible, lastRowUsed, lastRowVisible)
+End Function
+    

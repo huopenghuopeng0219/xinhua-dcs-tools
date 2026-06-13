@@ -1,0 +1,50 @@
+Sub AddAdvancedConditionalFormat()
+    Dim ws As Worksheet
+    Dim targetRange As Range
+    Dim cfRule As FormatCondition
+    Dim formulaStr As String
+    
+    Set ws = ActiveSheet
+    Set targetRange = ws.Range("A1:Z100")
+    targetRange.FormatConditions.Delete
+    
+    ' 正确的公式字符串写法
+    formulaStr = "OR(AND($F1=15,OR($G1=""DI"",$G1=""DO"",$G1=""SOE"")), " & _
+                 "AND($F1=7,OR($G1=""AI"",$G1=""AO"",$G1=""TC"",$G1=""RTD"",$G1=""PI"")))"
+    
+    Set cfRule = targetRange.FormatConditions.Add( _
+        Type:=xlExpression, _
+        Formula1:=formulaStr)
+    
+    ' 设置填充效果：双色、白色和黄色、水平底纹
+    With cfRule.Interior
+        .Pattern = xlPatternLinearGradient ' 设置为线性渐变
+        .PatternColor = vbWhite ' 颜色1：白色
+        .Color = vbYellow ' 颜色2：黄色
+        .PatternTintAndShade = 0
+        .Gradient.Degree = 90 ' 0度表示水平方向
+        .Gradient.ColorStops.Clear ' 清除默认颜色停止点
+        
+        ' 添加第一个颜色停止点（白色）
+        With .Gradient.ColorStops.Add(0)
+            .Color = vbWhite
+            .TintAndShade = 0
+        End With
+        
+        ' 添加第二个颜色停止点（黄色）
+        With .Gradient.ColorStops.Add(1)
+            .Color = vbYellow
+            .TintAndShade = 0
+        End With
+    End With
+    
+    ' 提示信息
+    MsgBox "已完成条件格式设置：" & vbCrLf & _
+           "1. 已清除所有现有规则" & vbCrLf & _
+           "2. 已添加新规则，使用指定公式" & vbCrLf & _
+           "3. 格式：白色和黄色水平渐变填充", vbInformation
+    
+    ' 打开条件格式规则管理器查看结果
+    targetRange.Select
+    Application.CommandBars.ExecuteMso "ConditionalFormattingRulesManager"
+End Sub
