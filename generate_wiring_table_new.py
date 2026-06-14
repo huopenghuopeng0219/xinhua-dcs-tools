@@ -6,6 +6,35 @@ from openpyxl.formatting.rule import FormulaRule
 from openpyxl.utils import get_column_letter
 
 
+class XlsWrapper:
+    """xlrd工作表的包装器，提供与openpyxl兼容的接口"""
+    def __init__(self, xls_sheet):
+        self.xls_sheet = xls_sheet
+        self.max_row = xls_sheet.nrows
+        self.max_column = xls_sheet.ncols
+        self.merged_cells = []
+        
+        # 提取合并单元格信息
+        for merge_range in xls_sheet.merged_cells:
+            class MergeObj:
+                def __init__(self, r1, r2, c1, c2):
+                    self.min_row = r1
+                    self.max_row = r2
+                    self.min_col = c1
+                    self.max_col = c2
+            self.merged_cells.append(MergeObj(merge_range[0], merge_range[1], merge_range[2], merge_range[3]))
+    
+    def cell(self, row, column):
+        """获取单元格对象（1-based索引）"""
+        # xlrd是0-based，转换为1-based
+        value = self.xls_sheet.cell_value(row - 1, column - 1)
+        # 返回一个带value属性的对象
+        class CellObj:
+            def __init__(self, v):
+                self.value = v
+        return CellObj(value)
+
+
 class WiringTableGenerator:
     """接线总表生成器 - 从卡件排布工作表生成接线总表"""
 
@@ -35,19 +64,44 @@ class WiringTableGenerator:
 
     def __init__(self, file_path):
         self.file_path = file_path
-        self.workbook = openpyxl.load_workbook(file_path, data_only=False)
+        # 根据文件扩展名选择读取方式
+        if file_path.lower().endswith('.xls'):
+            # .xls文件用xlrd读取
+            import xlrd
+            xls_wb = xlrd.open_workbook(file_path, formatting_info=True)
+            self.xls_workbook = xls_wb
+            self.workbook = None
+            # 包装所有工作表
+            self.wrapped_sheets = {}
+            for name in xls_wb.sheet_names():
+                self.wrapped_sheets[name] = XlsWrapper(xls_wb.sheet_by_name(name))
+        else:
+            # .xlsx/.xlsm文件用openpyxl读取
+            self.workbook = openpyxl.load_workbook(file_path, data_only=False)
+            self.xls_workbook = None
+            self.wrapped_sheets = {}
 
     def generate(self, output_path):
         """生成接线总表"""
         # 收集所有数据行
         all_rows = []
+        
+        # 获取工作表列表
+        if self.xls_workbook:
+            sheet_names = self.xls_workbook.sheet_names()
+        else:
+            sheet_names = self.workbook.sheetnames
 
-        for sheet_name in self.workbook.sheetnames:
+        for sheet_name in sheet_names:
             sheet_lower = sheet_name.lower()
             if not (sheet_lower.endswith("-az") or sheet_lower.startswith("卡件排布")):
                 continue
 
-            ws = self.workbook[sheet_name]
+            if self.xls_workbook:
+                ws = self.wrapped_sheets[sheet_name]
+            else:
+                ws = self.workbook[sheet_name]
+            
             rows = self._parse_sheet(ws, sheet_name)
             all_rows.extend(rows)
 
@@ -135,44 +189,49 @@ class WiringTableGenerator:
         return rows
 
     def _parse_block(self, ws, row, col):
-        """解析3x4合并单元格数据块"""
+        """解析数据块（支持合并单元格和单个单元格）"""
+        # 先尝试获取合并单元格
         merge = self._get_merge_area(ws, row, col)
-        if not merge:
-            return None
-
-        min_col, max_col, min_row, max_row = merge
-        merge_cols = max_col - min_col + 1
-        merge_rows = max_row - min_row + 1
-
-        if merge_cols != 3 or merge_rows != 4 or min_col != col:
-            return None
-
-        # 读取合并单元格内容
-        cell_value = ws.cell(row=min_row, column=min_col).value
-        if not cell_value:
-            return None
-
+        if merge:
+            min_col, max_col, min_row, max_row = merge
+            merge_cols = max_col - min_col + 1
+            merge_rows = max_row - min_row + 1
+            
+            if merge_cols == 3 and merge_rows == 4 and min_col == col:
+                cell_value = ws.cell(row=min_row, column=min_col).value
+                if cell_value:
+                    return self._parse_block_content(cell_value)
+        
+        # 尝试单个单元格（xls格式）
+        cell_value = ws.cell(row=row, column=col).value
+        if cell_value and "\n" in str(cell_value):
+            return self._parse_block_content(cell_value)
+        
+        return None
+    
+    def _parse_block_content(self, cell_value):
+        """解析单元格内容"""
         lines = str(cell_value).strip().split("\n")
         if len(lines) < 3:
             return None
-
+        
         card_no = lines[0].strip()
         signal_type = lines[1].strip().upper()
-
+        
         try:
             channel_count = int(lines[2].strip())
         except ValueError:
             return None
-
+        
         # 验证信号类型
         if signal_type not in self.SIGNAL_TYPE_16 and signal_type not in self.SIGNAL_TYPE_8:
             return None
-
+        
         # 提取卡号数字
         import re
         num_match = re.search(r'(\d+)', card_no)
         card_num = int(num_match.group(1)) if num_match else 0
-
+        
         return card_no, signal_type, channel_count, card_num
 
     def _build_row(self, dpu, station, block_no, channel, signal_type,
@@ -381,63 +440,31 @@ class WiringTableGenerator:
         # 打印标题（每页打印第1行）
         ws.print_title_rows = "1:1"
         
-        # 页面设置
-        ws.page_setup.orientation = "landscape"  # 横向
-        ws.page_setup.fitToWidth = 1  # 所有列打印在一页
-        ws.page_setup.fitToHeight = 0  # 不限制高度
-        ws.page_setup.horizontalCentered = True  # 水平居中
-        
-        # 页边距（单位：英寸）
-        ws.page_margins.left = 0.5
-        ws.page_margins.right = 0.5
-        ws.page_margins.top = 0.5
-        ws.page_margins.bottom = 1
-        ws.page_margins.header = 0.5
-        ws.page_margins.footer = 0.5
-        
-        # 适合页面
-        ws.sheet_properties.pageSetUpPr.fitToPage = True
-        
-        # 页脚：第X页，共Y页
-        ws.oddFooter.center.text = "第 &P 页，共 &N 页"
+        # 页面设置（用try避免兼容性问题）
+        try:
+            ws.page_setup.orientation = "landscape"
+            ws.page_setup.fitToWidth = 1
+            ws.page_setup.fitToHeight = 0
+            ws.page_margins.left = 0.5
+            ws.page_margins.right = 0.5
+            ws.page_margins.top = 0.5
+            ws.page_margins.bottom = 1
+            ws.page_margins.header = 0.5
+            ws.page_margins.footer = 0.5
+            ws.sheet_properties.pageSetUpPr.fitToPage = True
+            ws.oddFooter.center.text = "第 &P 页，共 &N 页"
+        except Exception as e:
+            print(f"警告：部分页面设置跳过 - {e}")
         
         # 保存文件
         wb.save(output_path)
-        
-        # 手动修复XML添加horizontalCentered
-        import zipfile
-        import re
-        
-        temp_file = output_path + ".tmp"
-        with zipfile.ZipFile(output_path, 'r') as zin:
-            files = {}
-            for name in zin.namelist():
-                files[name] = zin.read(name)
-            
-            # 修复sheet1.xml添加horizontalCentered
-            if 'xl/worksheets/sheet1.xml' in files:
-                sheet = files['xl/worksheets/sheet1.xml'].decode('utf-8')
-                # 在pageSetup中添加horizontalCentered="1"
-                sheet = sheet.replace(
-                    '<pageSetup orientation="landscape"',
-                    '<pageSetup orientation="landscape" horizontalCentered="1"'
-                )
-                files['xl/worksheets/sheet1.xml'] = sheet.encode('utf-8')
-            
-            # 写入临时文件
-            with zipfile.ZipFile(temp_file, 'w', zipfile.ZIP_DEFLATED) as zout:
-                for name, data in files.items():
-                    zout.writestr(name, data)
-        
-        # 替换原文件
-        import os
-        os.replace(temp_file, output_path)
 
     def _write_xls(self, output_path, rows):
         """写入xls文件（WPS兼容）"""
         import xlwt
         
         wb = xlwt.Workbook(encoding='utf-8')
+        wb.codepage = 0x04B0  # UTF-16
         ws = wb.add_sheet('接线总表')
         
         # 表头样式
@@ -555,7 +582,18 @@ class WiringTableGenerator:
         
         # 替换原文件
         import os
-        os.replace(temp_file, file_path)
+        try:
+            os.replace(temp_file, file_path)
+        except PermissionError:
+            # 文件被占用，尝试删除后重试
+            try:
+                os.remove(file_path)
+                os.replace(temp_file, file_path)
+            except:
+                # 如果还是失败，用新文件名
+                new_path = file_path.replace('.xlsx', '_new.xlsx')
+                os.replace(temp_file, new_path)
+                print(f"警告：原文件被占用，已保存为 {os.path.basename(new_path)}")
 
     def _apply_format_openpyxl(self, wb, ws, data_rows):
         """应用表格格式"""
@@ -613,6 +651,217 @@ class WiringTableGenerator:
                         )
 
 
+class ConfigGenerator:
+    """转组态文件生成器 - 从接线总表生成转组态xls文件"""
+    
+    # 接线总表列 -> 转组态IO表列的映射（A-P，共16列）
+    COLUMN_MAPPING = {
+        0: 0,   # A -> A (测点名)
+        1: 1,   # B -> B (中文描述)
+        2: 2,   # C -> C (DPU)
+        3: 3,   # D -> D (站号)
+        4: 4,   # E -> E (卡号)
+        5: 5,   # F -> F (卡通道号)
+        6: 6,   # G -> G (卡件类型)
+        7: 7,   # H -> H (测点类型)
+        8: 8,   # I -> I (特征字)
+        9: 9,   # J -> J (单位)
+        10: 10, # K -> K (下限)
+        11: 11, # L -> L (上限)
+        12: 12, # M -> M (端子柜号)
+        13: 13, # N -> N (正反面)
+        14: 14, # O -> O (端子板号)
+        15: 15, # P -> P (DO端子板号)
+    }
+    
+    # IO表表头（A-Z，26列）
+    IO_HEADERS = [
+        "测点名", "中文描述", "DPU", "站号", "卡号", "卡通道号", "卡件类型",
+        "测点类型", "特征字", "单位", "下限", "上限", "端子柜号", "正反面",
+        "端子板号", "DO端子板号", "开关报警", "机柜", "测点组", "供电",
+        "DO类型", "端子1", "端子2", "端子3", "KKS", "系统"
+    ]
+    
+    # DEVICE表表头（A-V，22列）
+    DEVICE_HEADERS = [
+        "VC", "描述", "DPU", "开指令", "关指令", "开到位", "关到位",
+        "远方控制", "电源消失", "故障", "其他1", "其他2", "其他3", "其他4",
+        "其他5", "其他6", "页号", "位置", "系统", "子图图", "操作面板", "KKS"
+    ]
+    
+    # ESMA表表头（A-M，13列）
+    ESMA_HEADERS = [
+        "设定", "描述", "DPU", "指令", "反馈", "在手动", "切手动",
+        "页号", "位置", "系统", "子图图", "操作面板", "KKS"
+    ]
+    
+    def __init__(self, wiring_table_path):
+        self.wiring_table_path = wiring_table_path
+    
+    def generate(self, output_path):
+        """生成转组态文件"""
+        import xlwt
+        
+        # 读取接线总表
+        wb_in = openpyxl.load_workbook(self.wiring_table_path, data_only=True)
+        ws_in = wb_in['接线总表']
+        
+        # 创建输出文件（用xlwt生成xls，ODBC驱动兼容）
+        wb_out = xlwt.Workbook(encoding='utf-8')
+        wb_out.codepage = 0x04B0  # UTF-16
+        
+        # 创建IO表
+        self._create_io_sheet(wb_out, ws_in)
+        
+        # 创建DEVICE表（只有表头）
+        self._create_device_sheet(wb_out)
+        
+        # 创建ESMA表（只有表头）
+        self._create_esma_sheet(wb_out)
+        
+        # 保存
+        wb_out.save(output_path)
+        print(f"转组态文件已生成: {output_path}")
+    
+    def _create_io_sheet(self, wb_out, ws_in):
+        """创建IO表"""
+        import xlwt
+        
+        ws_out = wb_out.add_sheet('IO')
+        
+        # 定义样式
+        # 表头样式：宋体12号，居中，四边框线
+        header_style = xlwt.easyxf(
+            'font: name 宋体, height 240;'
+            'alignment: horiz centre, vert centre;'
+            'borders: left thin, right thin, top thin, bottom thin;'
+        )
+        
+        # 数据样式：宋体10号，居中，四边框线
+        data_style = xlwt.easyxf(
+            'font: name 宋体, height 200;'
+            'alignment: horiz centre, vert centre;'
+            'borders: left thin, right thin, top thin, bottom thin;'
+        )
+        
+        # A/B/J列（文本格式）
+        text_style = xlwt.easyxf(
+            'font: name 宋体, height 200;'
+            'alignment: horiz centre, vert centre;'
+            'borders: left thin, right thin, top thin, bottom thin;',
+            num_format_str='@'
+        )
+        
+        # K/L列（上下限）样式：数值格式，2位小数
+        number_style = xlwt.easyxf(
+            'font: name 宋体, height 200;'
+            'alignment: horiz centre, vert centre;'
+            'borders: left thin, right thin, top thin, bottom thin;',
+            num_format_str='0.00'
+        )
+        
+        # 写表头（A-Z，26列）
+        for col, header in enumerate(self.IO_HEADERS):
+            ws_out.write(0, col, header, header_style)
+            # 设置列宽
+            if col < 2:
+                ws_out.col(col).width = 256 * 18  # 测点名、中文描述
+            else:
+                ws_out.col(col).width = 256 * 10
+        
+        # 写数据行
+        target_row = 1
+        for row in range(2, ws_in.max_row + 1):
+            # 检查是否有数据
+            if ws_in.cell(row=row, column=1).value is None and ws_in.cell(row=row, column=3).value is None:
+                continue
+            
+            # 映射列（A-P，共16列有数据）
+            for src_col, dst_col in self.COLUMN_MAPPING.items():
+                value = ws_in.cell(row=row, column=src_col + 1).value
+                if value is None:
+                    value = ""
+                
+                # 特殊处理：DPU和站号转为数字
+                if dst_col in [2, 3]:  # C, D列
+                    try:
+                        value = float(value) if value != "" else ""
+                    except:
+                        pass
+                
+                # 特殊处理：卡号和卡通道号转为数字
+                if dst_col in [4, 5]:  # E, F列
+                    try:
+                        value = float(value) if value != "" else ""
+                    except:
+                        pass
+                
+                # 特殊处理：下限和上限转为数字
+                if dst_col in [10, 11]:  # K, L列
+                    try:
+                        value = float(value) if value != "" else ""
+                    except:
+                        pass
+                
+                # 选择样式
+                if dst_col in [0, 1, 9]:  # A/B/J列（文本格式）
+                    style = text_style
+                elif dst_col in [10, 11]:  # K/L列（上下限，数值格式）
+                    style = number_style
+                else:
+                    style = data_style
+                
+                ws_out.write(target_row, dst_col, value, style)
+            
+            # Q-Z列留空（需要用户填写或后续处理）
+            for col in range(16, 26):
+                ws_out.write(target_row, col, "", data_style)
+            
+            target_row += 1
+        
+        print(f"IO表: 共 {target_row - 1} 行数据")
+    
+    def _create_device_sheet(self, wb_out):
+        """创建DEVICE表（只有表头）"""
+        import xlwt
+        
+        ws_out = wb_out.add_sheet('DEVICE')
+        
+        # 表头样式
+        header_style = xlwt.easyxf(
+            'font: name 宋体, height 240;'
+            'alignment: horiz centre, vert centre;'
+            'borders: left thin, right thin, top thin, bottom thin;'
+        )
+        
+        # 写表头（A-V，22列）
+        for col, header in enumerate(self.DEVICE_HEADERS):
+            ws_out.write(0, col, header, header_style)
+            ws_out.col(col).width = 256 * 12
+        
+        print("DEVICE表: 已创建（仅表头）")
+    
+    def _create_esma_sheet(self, wb_out):
+        """创建ESMA表（只有表头）"""
+        import xlwt
+        
+        ws_out = wb_out.add_sheet('ESMA')
+        
+        # 表头样式
+        header_style = xlwt.easyxf(
+            'font: name 宋体, height 240;'
+            'alignment: horiz centre, vert centre;'
+            'borders: left thin, right thin, top thin, bottom thin;'
+        )
+        
+        # 写表头（A-M，13列）
+        for col, header in enumerate(self.ESMA_HEADERS):
+            ws_out.write(0, col, header, header_style)
+            ws_out.col(col).width = 256 * 12
+        
+        print("ESMA表: 已创建（仅表头）")
+
+
 def main():
     if len(sys.argv) > 1:
         file_path = sys.argv[1]
@@ -621,22 +870,36 @@ def main():
 
     if not os.path.exists(file_path):
         print(f"错误: 文件不存在 - {file_path}")
-        print("用法: python generate_wiring_table_new.py <Excel文件路径> [xls|xlsx]")
+        print("用法: python generate_wiring_table_new.py <Excel文件路径> [xls|xlsx|转组态]")
         return
 
-    # 检查输出格式参数
-    output_format = "xls" if len(sys.argv) > 2 and sys.argv[2].lower() == "xls" else "xlsx"
+    # 检查参数
+    output_format = "xlsx"
+    generate_config = False
+    
+    if len(sys.argv) > 2:
+        arg = sys.argv[2].lower()
+        if arg == "xls":
+            output_format = "xls"
+        elif arg == "转组态":
+            generate_config = True
 
     print(f"正在处理: {file_path}")
-    print(f"输出格式: {output_format}")
 
-    generator = WiringTableGenerator(file_path)
-    ext = f".{output_format}"
-    output_path = os.path.join(os.path.dirname(file_path), f"接线总表{ext}")
-    count = generator.generate(output_path)
-
-    print(f"生成完成！共 {count} 行数据")
-    print(f"保存至: {output_path}")
+    if generate_config:
+        # 生成转组态文件
+        output_path = os.path.join(os.path.dirname(file_path), "转组态.xls")
+        generator = ConfigGenerator(file_path)
+        generator.generate(output_path)
+    else:
+        # 生成接线总表
+        print(f"输出格式: {output_format}")
+        generator = WiringTableGenerator(file_path)
+        ext = f".{output_format}"
+        output_path = os.path.join(os.path.dirname(file_path), f"接线总表{ext}")
+        count = generator.generate(output_path)
+        print(f"生成完成！共 {count} 行数据")
+        print(f"保存至: {output_path}")
 
 
 if __name__ == "__main__":
