@@ -700,166 +700,120 @@ class ConfigGenerator:
     
     def generate(self, output_path):
         """生成转组态文件"""
-        import xlwt
-        
         # 读取接线总表
         wb_in = openpyxl.load_workbook(self.wiring_table_path, data_only=True)
         ws_in = wb_in['接线总表']
         
-        # 创建输出文件（用xlwt生成xls，ODBC驱动兼容）
-        wb_out = xlwt.Workbook(encoding='utf-8')
-        wb_out.codepage = 0x04B0  # UTF-16
+        # 生成xlsx临时文件（使用唯一文件名避免冲突）
+        import time
+        temp_xlsx = output_path + f".tmp_{int(time.time())}.xlsx"
+        wb_temp = openpyxl.Workbook()
         
-        # 创建IO表
-        self._create_io_sheet(wb_out, ws_in)
+        self._create_io_sheet(wb_temp, ws_in)
+        self._create_device_sheet(wb_temp)
+        self._create_esma_sheet(wb_temp)
         
-        # 创建DEVICE表（只有表头）
-        self._create_device_sheet(wb_out)
+        wb_temp.save(temp_xlsx)
         
-        # 创建ESMA表（只有表头）
-        self._create_esma_sheet(wb_out)
-        
-        # 保存
-        wb_out.save(output_path)
-        print(f"转组态文件已生成: {output_path}")
+        # 用Excel转换为xls
+        try:
+            import win32com.client
+            import pythoncom
+            import subprocess
+            
+            # 先关闭所有Excel进程
+            subprocess.run(['taskkill', '/f', '/im', 'excel.exe'], 
+                         capture_output=True, creationflags=0x08000000)
+            
+            pythoncom.CoInitialize()
+            excel = win32com.client.Dispatch('Excel.Application')
+            excel.DisplayAlerts = False
+            wb = excel.Workbooks.Open(os.path.abspath(temp_xlsx))
+            wb.SaveAs(os.path.abspath(output_path), FileFormat=56)
+            wb.Close()
+            excel.Quit()
+            pythoncom.CoUninitialize()
+            print(f"转组态文件已生成: {output_path}")
+        except Exception as e:
+            print(f"Excel转换失败: {e}，使用xlwt备用方案")
+            self._generate_xls_fallback(temp_xlsx, output_path)
+        finally:
+            try:
+                os.remove(temp_xlsx)
+            except:
+                pass
     
     def _create_io_sheet(self, wb_out, ws_in):
         """创建IO表"""
-        import xlwt
+        ws_out = wb_out.active
+        ws_out.title = 'IO'
         
-        ws_out = wb_out.add_sheet('IO')
-        
-        # 定义样式
-        # 表头样式：宋体12号，居中，四边框线
-        header_style = xlwt.easyxf(
-            'font: name 宋体, height 240;'
-            'alignment: horiz centre, vert centre;'
-            'borders: left thin, right thin, top thin, bottom thin;'
-        )
-        
-        # 数据样式：宋体10号，居中，四边框线
-        data_style = xlwt.easyxf(
-            'font: name 宋体, height 200;'
-            'alignment: horiz centre, vert centre;'
-            'borders: left thin, right thin, top thin, bottom thin;'
-        )
-        
-        # A/B/J列（文本格式）
-        text_style = xlwt.easyxf(
-            'font: name 宋体, height 200;'
-            'alignment: horiz centre, vert centre;'
-            'borders: left thin, right thin, top thin, bottom thin;',
-            num_format_str='@'
-        )
-        
-        # K/L列（上下限）样式：数值格式，2位小数
-        number_style = xlwt.easyxf(
-            'font: name 宋体, height 200;'
-            'alignment: horiz centre, vert centre;'
-            'borders: left thin, right thin, top thin, bottom thin;',
-            num_format_str='0.00'
-        )
-        
-        # 写表头（A-Z，26列）
-        for col, header in enumerate(self.IO_HEADERS):
-            ws_out.write(0, col, header, header_style)
-            # 设置列宽
-            if col < 2:
-                ws_out.col(col).width = 256 * 18  # 测点名、中文描述
+        # 写表头
+        for col, header in enumerate(self.IO_HEADERS, 1):
+            cell = ws_out.cell(row=1, column=col, value=header)
+            cell.font = Font(name='宋体', size=12)
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+            cell.border = Border(
+                left=Side(style='thin'), right=Side(style='thin'),
+                top=Side(style='thin'), bottom=Side(style='thin')
+            )
+            if col <= 2:
+                ws_out.column_dimensions[get_column_letter(col)].width = 18
             else:
-                ws_out.col(col).width = 256 * 10
+                ws_out.column_dimensions[get_column_letter(col)].width = 12
         
-        # 写数据行
-        target_row = 1
+        # 写数据
+        target_row = 2
         for row in range(2, ws_in.max_row + 1):
-            # 检查是否有数据
             if ws_in.cell(row=row, column=1).value is None and ws_in.cell(row=row, column=3).value is None:
                 continue
             
-            # 映射列（A-P，共16列有数据）
             for src_col, dst_col in self.COLUMN_MAPPING.items():
                 value = ws_in.cell(row=row, column=src_col + 1).value
                 if value is None:
                     value = ""
-                
-                # 特殊处理：DPU和站号转为数字
-                if dst_col in [2, 3]:  # C, D列
+                if dst_col in [2, 3, 4, 5, 10, 11]:
                     try:
                         value = float(value) if value != "" else ""
                     except:
                         pass
-                
-                # 特殊处理：卡号和卡通道号转为数字
-                if dst_col in [4, 5]:  # E, F列
-                    try:
-                        value = float(value) if value != "" else ""
-                    except:
-                        pass
-                
-                # 特殊处理：下限和上限转为数字
-                if dst_col in [10, 11]:  # K, L列
-                    try:
-                        value = float(value) if value != "" else ""
-                    except:
-                        pass
-                
-                # 选择样式
-                if dst_col in [0, 1, 9]:  # A/B/J列（文本格式）
-                    style = text_style
-                elif dst_col in [10, 11]:  # K/L列（上下限，数值格式）
-                    style = number_style
-                else:
-                    style = data_style
-                
-                ws_out.write(target_row, dst_col, value, style)
+                cell = ws_out.cell(row=target_row, column=dst_col + 1, value=value)
+                # K/L列设置数值格式
+                if dst_col in [10, 11]:
+                    cell.number_format = '0.00'
             
-            # Q-Z列留空（需要用户填写或后续处理）
             for col in range(16, 26):
-                ws_out.write(target_row, col, "", data_style)
+                ws_out.cell(row=target_row, column=col + 1, value="")
             
             target_row += 1
-        
-        print(f"IO表: 共 {target_row - 1} 行数据")
     
     def _create_device_sheet(self, wb_out):
-        """创建DEVICE表（只有表头）"""
-        import xlwt
-        
-        ws_out = wb_out.add_sheet('DEVICE')
-        
-        # 表头样式
-        header_style = xlwt.easyxf(
-            'font: name 宋体, height 240;'
-            'alignment: horiz centre, vert centre;'
-            'borders: left thin, right thin, top thin, bottom thin;'
-        )
-        
-        # 写表头（A-V，22列）
-        for col, header in enumerate(self.DEVICE_HEADERS):
-            ws_out.write(0, col, header, header_style)
-            ws_out.col(col).width = 256 * 12
-        
-        print("DEVICE表: 已创建（仅表头）")
+        """创建DEVICE表"""
+        ws_out = wb_out.create_sheet('DEVICE')
+        for col, header in enumerate(self.DEVICE_HEADERS, 1):
+            ws_out.cell(row=1, column=col, value=header)
     
     def _create_esma_sheet(self, wb_out):
-        """创建ESMA表（只有表头）"""
+        """创建ESMA表"""
+        ws_out = wb_out.create_sheet('ESMA')
+        for col, header in enumerate(self.ESMA_HEADERS, 1):
+            ws_out.cell(row=1, column=col, value=header)
+    
+    def _generate_xls_fallback(self, xlsx_path, xls_path):
+        """xlwt备用方案"""
         import xlwt
-        
-        ws_out = wb_out.add_sheet('ESMA')
-        
-        # 表头样式
-        header_style = xlwt.easyxf(
-            'font: name 宋体, height 240;'
-            'alignment: horiz centre, vert centre;'
-            'borders: left thin, right thin, top thin, bottom thin;'
-        )
-        
-        # 写表头（A-M，13列）
-        for col, header in enumerate(self.ESMA_HEADERS):
-            ws_out.write(0, col, header, header_style)
-            ws_out.col(col).width = 256 * 12
-        
-        print("ESMA表: 已创建（仅表头）")
+        wb_in = openpyxl.load_workbook(xlsx_path, data_only=True)
+        wb_out = xlwt.Workbook(encoding='utf-8')
+        for sheet_name in wb_in.sheetnames:
+            ws_in = wb_in[sheet_name]
+            ws_out = wb_out.add_sheet(sheet_name)
+            for row in range(1, ws_in.max_row + 1):
+                for col in range(1, ws_in.max_column + 1):
+                    value = ws_in.cell(row=row, column=col).value
+                    if value is not None:
+                        ws_out.write(row - 1, col - 1, value)
+        wb_out.save(xls_path)
+        print(f"转组态文件已生成(xlwt): {xls_path}")
 
 
 def main():
