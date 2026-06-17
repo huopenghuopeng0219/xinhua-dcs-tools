@@ -156,6 +156,7 @@ class WiringTableGenerator:
                         actual_channels = 8
 
                     # 获取P值来源
+                    p_row = None
                     if signal_type == "DO":
                         # DO信号从卡件排布读取
                         p_row = 23 + block_index * 4
@@ -177,7 +178,8 @@ class WiringTableGenerator:
                             card_prefix=card_prefix,
                             o_value=o_value,
                             p_value=p_value,
-                            cabinet=cabinet
+                            cabinet=cabinet,
+                            p_row=p_row if signal_type == "DO" else None
                         )
                         rows.append(row_data)
 
@@ -235,7 +237,7 @@ class WiringTableGenerator:
         return card_no, signal_type, channel_count, card_num
 
     def _build_row(self, dpu, station, block_no, channel, signal_type,
-                   card_prefix, o_value, p_value, cabinet):
+                   card_prefix, o_value, p_value, cabinet, p_row=None):
         """构建一行数据"""
         # 测点类型
         point_type = self.POINT_TYPE_MAP.get(signal_type, "")
@@ -271,6 +273,7 @@ class WiringTableGenerator:
             "N": front_back,
             "O": o_value,
             "P": p_value,
+            "P_ROW": p_row,
             "Q": "",  # AI是否供电/DO是否常闭
             "R": r_value,
             "S": s_value,
@@ -403,7 +406,12 @@ class WiringTableGenerator:
             # 写入静态值 (C-Q)
             for col_idx in range(3, 18):  # C=3 到 Q=17
                 key = keys[col_idx - 1]
-                ws.cell(row=row_idx, column=col_idx, value=row_data[key])
+                # P列(16)特殊处理：DO信号写公式
+                if col_idx == 16 and row_data.get("G") == "DO" and row_data.get("P_ROW"):
+                    formula_p = f'=IF(ISNUMBER(FIND("DO",G{row_idx})),卡件排布!$I${row_data["P_ROW"]},O{row_idx})'
+                    ws.cell(row=row_idx, column=col_idx, value=formula_p)
+                else:
+                    ws.cell(row=row_idx, column=col_idx, value=row_data[key])
 
             # 写入R/S/T/U/V/W公式
             r = row_idx
