@@ -74,7 +74,7 @@ class MainWindow(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("接线表和转组态生成器 V1.0")
+        self.setWindowTitle("接线表和转组态生成器 V2.1")
         self.setFixedSize(500, 350)
         self.file_path = None
         self._init_ui()
@@ -140,6 +140,12 @@ class MainWindow(QMainWindow):
         self.status_label.setAlignment(Qt.AlignCenter)
         self.status_label.setStyleSheet("color: blue; padding: 5px;")
         layout.addWidget(self.status_label)
+        
+        # 底部联系信息
+        footer = QLabel("发现BUG请联系：霍 15847214219")
+        footer.setAlignment(Qt.AlignCenter)
+        footer.setStyleSheet("color: gray; font-size: 11px; padding: 8px;")
+        layout.addWidget(footer)
     
     def _update_prompt(self):
         """更新提示文字"""
