@@ -134,6 +134,22 @@ class WiringTableGenerator:
 
             # 获取卡件前缀
             card_prefix = ws.cell(row=18, column=col_num).value or ""
+            
+            # 如果Row 18没有前缀，从第一个卡件数据中提取
+            if not card_prefix:
+                for scan_row in range(22, 64, 4):
+                    merge = self._get_merge_area(ws, scan_row, col_num)
+                    if merge:
+                        min_col, max_col, min_row, max_row = merge
+                        if max_col - min_col + 1 == 3 and max_row - min_row + 1 == 4:
+                            cell_val = ws.cell(row=min_row, column=min_col).value
+                            if cell_val:
+                                first_line = str(cell_val).strip().split("\n")[0].strip()
+                                import re
+                                prefix_match = re.match(r'^([A-Za-z]+)', first_line)
+                                if prefix_match:
+                                    card_prefix = prefix_match.group(1)
+                                    break
 
             # 扫描数据块
             current_row = 22
