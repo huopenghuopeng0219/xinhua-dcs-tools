@@ -14,14 +14,14 @@ class XlsWrapper:
         self.max_column = xls_sheet.ncols
         self.merged_cells = []
         
-        # 提取合并单元格信息
+        # 提取合并单元格信息（xlrd是半开区间[r1,r2)且0-based，转为闭区间1-based）
         for merge_range in xls_sheet.merged_cells:
             class MergeObj:
                 def __init__(self, r1, r2, c1, c2):
-                    self.min_row = r1
-                    self.max_row = r2
-                    self.min_col = c1
-                    self.max_col = c2
+                    self.min_row = r1 + 1       # 0-based → 1-based
+                    self.max_row = r2            # r2是exclusive，r2-1+1=r2
+                    self.min_col = c1 + 1        # 0-based → 1-based
+                    self.max_col = c2            # 同理
             self.merged_cells.append(MergeObj(merge_range[0], merge_range[1], merge_range[2], merge_range[3]))
     
     def cell(self, row, column):
@@ -38,10 +38,10 @@ class XlsWrapper:
 class WiringTableGenerator:
     """接线总表生成器 - 从卡件排布工作表生成接线总表"""
 
-    # 卡件排布中的目标列：(列号, 列名, P值来源列)
-    # P值来源列：I=9, AN=40, 可根据实际文件调整
-    TARGET_COLUMNS = [(12, "L", 9), (19, "S", 9), (26, "Z", 9),
-                      (36, "AJ", 40), (43, "AQ", 40), (50, "AX", 40)]
+    # 卡件排布中的目标列：(列号, 列名)
+    # P值来源列：DO单元格左侧3列（列号-3）
+    TARGET_COLUMNS = [(12, "L"), (19, "S"), (26, "Z"),
+                      (36, "AJ"), (43, "AQ"), (50, "AX")]
 
     # 信号类型与通道数映射
     SIGNAL_TYPE_16 = {"DI", "DO", "SOE"}  # 16通道
@@ -117,7 +117,7 @@ class WiringTableGenerator:
         """解析单个工作表"""
         rows = []
 
-        for col_num, col_name, p_col in self.TARGET_COLUMNS:
+        for col_num, col_name in self.TARGET_COLUMNS:
             # 获取DPU-站号
             cell_value = ws.cell(row=20, column=col_num).value
             if not cell_value:
@@ -158,8 +158,9 @@ class WiringTableGenerator:
                     # 获取P值来源
                     p_row = None
                     if signal_type == "DO":
-                        # DO信号从卡件排布读取
-                        p_row = 23 + block_index * 4
+                        # DO信号从卡件排布读取，P值在DO合并单元格左侧3列、第2行
+                        p_row = current_row + 1
+                        p_col = col_num - 3  # 左侧3列
                         p_value = ws.cell(row=p_row, column=p_col).value or ""
                     else:
                         # 非DO信号P=O
@@ -406,12 +407,7 @@ class WiringTableGenerator:
             # 写入静态值 (C-Q)
             for col_idx in range(3, 18):  # C=3 到 Q=17
                 key = keys[col_idx - 1]
-                # P列(16)特殊处理：DO信号写公式
-                if col_idx == 16 and row_data.get("G") == "DO" and row_data.get("P_ROW"):
-                    formula_p = f'=IF(ISNUMBER(FIND("DO",G{row_idx})),卡件排布!$I${row_data["P_ROW"]},O{row_idx})'
-                    ws.cell(row=row_idx, column=col_idx, value=formula_p)
-                else:
-                    ws.cell(row=row_idx, column=col_idx, value=row_data[key])
+                ws.cell(row=row_idx, column=col_idx, value=row_data[key])
 
             # 写入R/S/T/U/V/W公式
             r = row_idx
