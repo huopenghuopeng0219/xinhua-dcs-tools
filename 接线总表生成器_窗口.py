@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-接线总表生成器 V1.0
+新华DCS辅助器 V2.2.1
 窗口界面版本（PySide6）
 """
 import sys
@@ -25,6 +25,7 @@ else:
 
 sys.path.insert(0, BASE_PATH)
 from generate_wiring_table_new import WiringTableGenerator, ConfigGenerator
+from material_difference import generate_difference, output_path_for
 
 
 def get_resource_path(filename):
@@ -40,29 +41,48 @@ def get_resource_path(filename):
     return path1
 
 
+def output_path_for_mode(file_path, mode):
+    """按源文件名保留项目名称和版本，只替换输出类型。"""
+    if mode == "difference":
+        return str(output_path_for(file_path, BASE_PATH))
+    source_label, output_label, extension = {
+        "wiring": ("机柜设计", "接线总表", ".xlsx"),
+        "config": ("接线总表", "转组态", ".xls"),
+    }[mode]
+    stem = os.path.splitext(os.path.basename(file_path))[0]
+    if source_label in stem:
+        stem = stem.replace(source_label, output_label, 1)
+    else:
+        stem = f"{stem}-{output_label}"
+    return os.path.join(BASE_PATH, stem + extension)
+
+
 class GenerateThread(QThread):
     """后台生成线程"""
     finished = Signal(bool, str, int)
     
-    def __init__(self, file_path, output_format, generate_config=False):
+    def __init__(self, file_path, output_format, mode="wiring"):
         super().__init__()
         self.file_path = file_path
         self.output_format = output_format
-        self.generate_config = generate_config
+        self.mode = mode
     
     def run(self):
         try:
-            if self.generate_config:
+            if self.mode == "difference":
+                target = output_path_for_mode(self.file_path, self.mode)
+                output_path, count = generate_difference(self.file_path, target)
+                self.finished.emit(True, str(output_path), count)
+            elif self.mode == "config":
                 # 生成转组态
-                output_path = os.path.join(os.path.dirname(self.file_path), "转组态.xls")
+                output_path = output_path_for_mode(self.file_path, self.mode)
                 generator = ConfigGenerator(self.file_path)
                 generator.generate(output_path)
                 self.finished.emit(True, output_path, 0)
             else:
                 # 生成接线总表
                 generator = WiringTableGenerator(self.file_path)
-                output_dir = os.path.dirname(self.file_path)
-                output_path = os.path.join(output_dir, f"接线总表.{self.output_format}")
+                output_path = output_path_for_mode(self.file_path, self.mode)
                 count = generator.generate(output_path)
                 self.finished.emit(True, output_path, count)
         except Exception as e:
@@ -74,8 +94,8 @@ class MainWindow(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("接线表和转组态生成器 V2.1")
-        self.setFixedSize(500, 350)
+        self.setWindowTitle("新华DCS辅助器 V2.2.1")
+        self.setFixedSize(560, 360)
         self.file_path = None
         self._init_ui()
         self._update_prompt()
@@ -87,7 +107,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(central)
         
         # 标题
-        title = QLabel("接线表和转组态生成器")
+        title = QLabel("新华DCS辅助器")
         title.setFont(QFont("微软雅黑", 16, QFont.Bold))
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
@@ -118,6 +138,11 @@ class MainWindow(QMainWindow):
         self.func_group.addButton(self.config_radio, 1)
         self.config_radio.toggled.connect(self._update_prompt)
         func_layout.addWidget(self.config_radio)
+
+        self.difference_radio = QRadioButton("生成差异表")
+        self.func_group.addButton(self.difference_radio, 2)
+        self.difference_radio.toggled.connect(self._update_prompt)
+        func_layout.addWidget(self.difference_radio)
         
         func_group.setLayout(func_layout)
         layout.addWidget(func_group)
@@ -129,7 +154,7 @@ class MainWindow(QMainWindow):
         self.generate_btn.setEnabled(False)
         self.generate_btn.clicked.connect(self._generate)
         layout.addWidget(self.generate_btn)
-        
+
         # 进度条
         self.progress = QProgressBar()
         self.progress.setVisible(False)
@@ -149,10 +174,10 @@ class MainWindow(QMainWindow):
     
     def _update_prompt(self):
         """更新提示文字"""
-        if self.wiring_radio.isChecked():
-            self.status_label.setText("请选择机柜设计excel")
-        else:
+        if self.config_radio.isChecked():
             self.status_label.setText("请选择接线总表excel")
+        else:
+            self.status_label.setText("请选择机柜设计excel")
         self.status_label.setStyleSheet("color: blue; padding: 5px;")
     
     def _select_file(self):
@@ -184,21 +209,30 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "提示", "请先选择源文件！")
             return
         
-        generate_config = self.config_radio.isChecked()
+        mode = {0: "wiring", 1: "config", 2: "difference"}[self.func_group.checkedId()]
+        if mode == "difference" and not self.file_path.lower().endswith((".xlsx", ".xlsm")):
+            QMessageBox.warning(self, "提示", "差异表需要 .xlsx 或 .xlsm 机柜设计文件")
+            return
+        output_path = output_path_for_mode(self.file_path, mode)
+        if os.path.exists(output_path) and QMessageBox.question(
+            self, "覆盖文件", f"文件已存在，是否覆盖？\n{output_path}"
+        ) != QMessageBox.Yes:
+            return
         
         # 禁用按钮，显示进度
         self.generate_btn.setEnabled(False)
         self.progress.setVisible(True)
         self.progress.setRange(0, 0)
         
-        if generate_config:
-            self.status_label.setText("正在生成转组态文件，请稍候...")
-        else:
-            self.status_label.setText("正在生成接线总表，请稍候...")
+        self.status_label.setText({
+            "wiring": "正在生成接线总表，请稍候...",
+            "config": "正在生成转组态文件，请稍候...",
+            "difference": "正在生成差异表，请稍候...",
+        }[mode])
         self.status_label.setStyleSheet("color: orange; padding: 5px;")
         
         # 启动后台线程（固定输出xlsx）
-        self.thread = GenerateThread(self.file_path, "xlsx", generate_config)
+        self.thread = GenerateThread(self.file_path, "xlsx", mode)
         self.thread.finished.connect(self._on_finished)
         self.thread.start()
     

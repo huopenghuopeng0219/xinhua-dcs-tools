@@ -735,27 +735,8 @@ class ConfigGenerator:
         
         wb_temp.save(temp_xlsx)
         
-        # 用Excel转换为xls
+        # 直接生成xls，避免关闭用户正在使用的Excel进程
         try:
-            import win32com.client
-            import pythoncom
-            import subprocess
-            
-            # 先关闭所有Excel进程
-            subprocess.run(['taskkill', '/f', '/im', 'excel.exe'], 
-                         capture_output=True, creationflags=0x08000000)
-            
-            pythoncom.CoInitialize()
-            excel = win32com.client.Dispatch('Excel.Application')
-            excel.DisplayAlerts = False
-            wb = excel.Workbooks.Open(os.path.abspath(temp_xlsx))
-            wb.SaveAs(os.path.abspath(output_path), FileFormat=56)
-            wb.Close()
-            excel.Quit()
-            pythoncom.CoUninitialize()
-            print(f"转组态文件已生成: {output_path}")
-        except Exception as e:
-            print(f"Excel转换失败: {e}，使用xlwt备用方案")
             self._generate_xls_fallback(temp_xlsx, output_path)
         finally:
             try:
