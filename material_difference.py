@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 
 import openpyxl
-from openpyxl.styles import Alignment, Border, Font, Side
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Protection, Side
 from openpyxl.utils import get_column_letter
 
 
@@ -75,17 +75,138 @@ def _copy_style(old, new):
         new.protection = copy(old.protection)
 
 
+
+def _xls_color(book, index):
+    """把 xlrd 调色板颜色转换为 openpyxl 的 ARGB。"""
+    rgb = book.colour_map.get(index)
+    if not rgb:
+        return None
+    return "FF{:02X}{:02X}{:02X}".format(*rgb)
+
+
+def _xls_side(book, border, edge):
+    styles = {
+        0: None, 1: "thin", 2: "medium", 3: "dashed", 4: "dotted",
+        5: "thick", 6: "double", 7: "hair", 8: "mediumDashed",
+        9: "dashDot", 10: "mediumDashDot", 11: "dashDotDot",
+        12: "mediumDashDotDot", 13: "slantDashDot",
+    }
+    style = styles.get(getattr(border, f"{edge}_line_style", 0))
+    color = _xls_color(book, getattr(border, f"{edge}_colour_index", 0))
+    return Side(style=style, color=color)
+
+
+def _apply_xls_style(book, source_sheet, row, column, target_cell):
+    """复制旧版 .xls 单元格的常用显示格式。"""
+    xf = book.xf_list[source_sheet.cell_xf_index(row, column)]
+    old_font = book.font_list[xf.font_index]
+    target_cell.font = Font(
+        name=old_font.name or "宋体",
+        size=old_font.height / 20 if old_font.height else None,
+        bold=bool(old_font.bold),
+        italic=bool(old_font.italic),
+        underline="single" if old_font.underlined else None,
+        strike=bool(old_font.struck_out),
+        color=_xls_color(book, old_font.colour_index),
+    )
+    background = xf.background
+    fill_color = _xls_color(book, background.pattern_colour_index)
+    target_cell.fill = PatternFill(
+        fill_type="solid" if background.fill_pattern else None,
+        fgColor=fill_color or "00000000",
+    )
+    border = xf.border
+    target_cell.border = Border(
+        left=_xls_side(book, border, "left"),
+        right=_xls_side(book, border, "right"),
+        top=_xls_side(book, border, "top"),
+        bottom=_xls_side(book, border, "bottom"),
+    )
+    horizontal = {
+        0: "general", 1: "left", 2: "center", 3: "right",
+        4: "fill", 5: "justify", 6: "centerContinuous", 7: "distributed",
+    }.get(xf.alignment.hor_align, "general")
+    vertical = {
+        0: "top", 1: "center", 2: "bottom", 3: "justify", 4: "distributed",
+    }.get(xf.alignment.vert_align, "bottom")
+    rotation = xf.alignment.rotation
+    target_cell.alignment = Alignment(
+        horizontal=horizontal,
+        vertical=vertical,
+        wrap_text=bool(xf.alignment.text_wrapped),
+        shrink_to_fit=bool(xf.alignment.shrink_to_fit),
+        text_rotation=rotation if 0 <= rotation <= 180 else 0,
+    )
+    number_format = book.format_map.get(xf.format_key)
+    if number_format:
+        target_cell.number_format = number_format.format_str
+    target_cell.protection = Protection(
+        locked=bool(xf.protection.cell_locked),
+        hidden=bool(xf.protection.formula_hidden),
+    )
+
+
+def _load_xls(source_path):
+    """读取旧版 .xls，并转换为差异表生成器使用的工作簿对象。"""
+    import xlrd
+
+    legacy = xlrd.open_workbook(str(source_path), formatting_info=True)
+    workbook = openpyxl.Workbook()
+    workbook.remove(workbook.active)
+    for old_sheet in legacy.sheets():
+        if not old_sheet.name.upper().endswith("-MX"):
+            continue
+        sheet = workbook.create_sheet(old_sheet.name)
+        for row in range(old_sheet.nrows):
+            row_info = old_sheet.rowinfo_map.get(row)
+            if row_info:
+                sheet.row_dimensions[row + 1].height = row_info.height / 20
+                sheet.row_dimensions[row + 1].hidden = bool(row_info.hidden)
+            for column in range(old_sheet.ncols):
+                old_cell = old_sheet.cell(row, column)
+                value = old_cell.value
+                if old_cell.ctype == xlrd.XL_CELL_DATE:
+                    value = xlrd.xldate_as_datetime(value, legacy.datemode)
+                elif old_cell.ctype == xlrd.XL_CELL_BOOLEAN:
+                    value = bool(value)
+                elif old_cell.ctype == xlrd.XL_CELL_ERROR:
+                    value = xlrd.error_text_from_code.get(value, "#ERROR!")
+                target = sheet.cell(row + 1, column + 1, value)
+                _apply_xls_style(legacy, old_sheet, row, column, target)
+        for column, column_info in old_sheet.colinfo_map.items():
+            dimension = sheet.column_dimensions[get_column_letter(column + 1)]
+            dimension.width = column_info.width / 256
+            dimension.hidden = bool(column_info.hidden)
+        for row_start, row_end, col_start, col_end in old_sheet.merged_cells:
+            sheet.merge_cells(
+                start_row=row_start + 1,
+                end_row=row_end,
+                start_column=col_start + 1,
+                end_column=col_end,
+            )
+    return workbook
+
+
+def _load_source(source_path):
+    if source_path.suffix.lower() == ".xls":
+        workbook = _load_xls(source_path)
+        return workbook, workbook
+    return (
+        openpyxl.load_workbook(source_path, data_only=False),
+        openpyxl.load_workbook(source_path, data_only=True),
+    )
+
+
 def generate_difference(source_path, output_path=None):
     """生成差异表，返回 (输出路径, 不同代号数)。"""
     source_path = Path(source_path)
-    if source_path.suffix.lower() not in {".xlsx", ".xlsm"}:
-        raise ValueError("差异表需要 .xlsx 或 .xlsm 机柜设计文件")
+    if source_path.suffix.lower() not in {".xls", ".xlsx", ".xlsm"}:
+        raise ValueError("差异表需要 .xls、.xlsx 或 .xlsm 机柜设计文件")
     output_path = Path(output_path) if output_path else output_path_for(source_path)
     if source_path.resolve() == output_path.resolve():
         raise ValueError("输出路径不能与源文件相同")
 
-    workbook = openpyxl.load_workbook(source_path, data_only=False)
-    cached = openpyxl.load_workbook(source_path, data_only=True)
+    workbook, cached = _load_source(source_path)
     mx_sheets = [ws for ws in workbook.worksheets if ws.title.upper().endswith("-MX")]
     if not mx_sheets:
         raise ValueError("源文件中没有以 -MX 结尾的工作表")
@@ -184,7 +305,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="从机柜设计文件生成机柜差异表")
-    parser.add_argument("source", help="机柜设计 .xlsx/.xlsm 文件")
+    parser.add_argument("source", help="机柜设计 .xls/.xlsx/.xlsm 文件")
     parser.add_argument("--output", help="输出路径，默认在程序目录")
     arguments = parser.parse_args()
     path, count = generate_difference(arguments.source, arguments.output)

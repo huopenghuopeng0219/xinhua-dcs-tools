@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-新华DCS辅助器 V2.2.1
+新华DCS辅助器 V2.2.2
 窗口界面版本（PySide6）
 """
 import sys
@@ -94,7 +94,7 @@ class MainWindow(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("新华DCS辅助器 V2.2.1")
+        self.setWindowTitle("新华DCS辅助器 V2.2.2")
         self.setFixedSize(560, 360)
         self.file_path = None
         self._init_ui()
@@ -210,8 +210,8 @@ class MainWindow(QMainWindow):
             return
         
         mode = {0: "wiring", 1: "config", 2: "difference"}[self.func_group.checkedId()]
-        if mode == "difference" and not self.file_path.lower().endswith((".xlsx", ".xlsm")):
-            QMessageBox.warning(self, "提示", "差异表需要 .xlsx 或 .xlsm 机柜设计文件")
+        if mode == "difference" and not self.file_path.lower().endswith((".xls", ".xlsx", ".xlsm")):
+            QMessageBox.warning(self, "提示", "差异表需要 .xls、.xlsx 或 .xlsm 机柜设计文件")
             return
         output_path = output_path_for_mode(self.file_path, mode)
         if os.path.exists(output_path) and QMessageBox.question(

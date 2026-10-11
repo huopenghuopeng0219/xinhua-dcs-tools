@@ -132,8 +132,8 @@ class WiringTableApp:
         if not self.file_path:
             messagebox.showwarning("提示", "请先选择机柜设计文件！")
             return
-        if not self.file_path.lower().endswith((".xlsx", ".xlsm")):
-            messagebox.showwarning("提示", "差异表需要 .xlsx 或 .xlsm 机柜设计文件")
+        if not self.file_path.lower().endswith((".xls", ".xlsx", ".xlsm")):
+            messagebox.showwarning("提示", "差异表需要 .xls、.xlsx 或 .xlsm 机柜设计文件")
             return
         target = output_path_for(self.file_path)
         if target.exists() and not messagebox.askyesno("覆盖文件", f"差异表已存在，是否覆盖？\n{target}"):
