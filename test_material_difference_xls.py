@@ -27,6 +27,8 @@ def main():
         italic.borders = borders
 
         columns = {7: "代号", 8: "名称", 38: "数量", 42: "备注", 46: "更改"}
+        for column in range(56):
+            sheet.col(column).width = 409
         for column, name in columns.items():
             sheet.write_merge(1, 2, column, column, name, header)
         sheet.write(3, 5, "整件", italic)
@@ -48,6 +50,7 @@ def main():
         assert result["AZ2"].value == "原因"
         assert "AZ4:AZ5" in {str(item) for item in result.merged_cells.ranges}
         assert result["A4"].border.left.style == "thin"
+        assert abs(result.column_dimensions["A"].width - 409 / 256) < 0.01
 
     print(".xls 差异表检查通过")
 

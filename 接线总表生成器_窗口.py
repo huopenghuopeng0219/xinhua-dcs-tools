@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-新华DCS辅助器 V2.2.2
+新华DCS辅助器 V2.2.3
 窗口界面版本（PySide6）
 """
 import sys
@@ -94,7 +94,7 @@ class MainWindow(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("新华DCS辅助器 V2.2.2")
+        self.setWindowTitle("新华DCS辅助器 V2.2.3")
         self.setFixedSize(560, 360)
         self.file_path = None
         self._init_ui()

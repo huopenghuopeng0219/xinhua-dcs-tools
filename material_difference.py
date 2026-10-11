@@ -76,6 +76,23 @@ def _copy_style(old, new):
 
 
 
+
+def _copy_column_dimensions(source, target, first_column, last_column, column_offset):
+    """复制模板列宽；差异表删除 A:E 后把 F:BE 平移到 A:AZ。"""
+    target.sheet_format.baseColWidth = source.sheet_format.baseColWidth
+    target.sheet_format.defaultColWidth = source.sheet_format.defaultColWidth
+    for old_column in range(first_column, last_column + 1):
+        old_letter = get_column_letter(old_column)
+        old_dimension = source.column_dimensions.get(old_letter)
+        if old_dimension is None:
+            continue
+        new_letter = get_column_letter(old_column + column_offset)
+        new_dimension = target.column_dimensions[new_letter]
+        new_dimension.width = old_dimension.width
+        new_dimension.hidden = old_dimension.hidden
+        new_dimension.bestFit = old_dimension.bestFit
+
+
 def _xls_color(book, index):
     """把 xlrd 调色板颜色转换为 openpyxl 的 ARGB。"""
     rgb = book.colour_map.get(index)
@@ -157,6 +174,9 @@ def _load_xls(source_path):
         if not old_sheet.name.upper().endswith("-MX"):
             continue
         sheet = workbook.create_sheet(old_sheet.name)
+        sheet.sheet_format.baseColWidth = old_sheet.defcolwidth or 8
+        if old_sheet.standardwidth:
+            sheet.sheet_format.defaultColWidth = old_sheet.standardwidth / 256
         for row in range(old_sheet.nrows):
             row_info = old_sheet.rowinfo_map.get(row)
             if row_info:
@@ -250,6 +270,7 @@ def generate_difference(source_path, output_path=None):
     sheet.page_setup = copy(template.page_setup)
     sheet.sheet_view.view = "normal"
     sheet.sheet_view.showGridLines = True
+    _copy_column_dimensions(template, sheet, 6, 56, shift)
 
     _copy_rows(template, sheet, 2, 3, 2, 6, 56, shift)
     title_stem = source_path.stem.replace("机柜设计", "差异表", 1)
