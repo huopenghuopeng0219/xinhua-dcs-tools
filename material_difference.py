@@ -270,7 +270,8 @@ def generate_difference(source_path, output_path=None):
     sheet.page_setup = copy(template.page_setup)
     sheet.sheet_view.view = "normal"
     sheet.sheet_view.showGridLines = True
-    _copy_column_dimensions(template, sheet, 6, 56, shift)
+    if source_path.suffix.lower() == ".xls":
+        _copy_column_dimensions(template, sheet, 6, 56, shift)
 
     _copy_rows(template, sheet, 2, 3, 2, 6, 56, shift)
     title_stem = source_path.stem.replace("机柜设计", "差异表", 1)

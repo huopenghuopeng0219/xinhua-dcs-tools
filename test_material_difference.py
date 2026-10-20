@@ -1,7 +1,9 @@
 from collections import defaultdict
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import openpyxl
+from openpyxl.styles import Font
 
 from material_difference import generate_difference
 
@@ -68,6 +70,32 @@ def test_sample():
                 cell.border.top.style, cell.border.bottom.style} == {'thin'}
 
 
+
+def test_xlsx_keeps_original_layout_path():
+    with TemporaryDirectory(dir=Path(__file__).parent) as directory:
+        source = Path(directory) / "测试项目-机柜设计-V0.xlsx"
+        target = Path(directory) / "测试项目-差异表-V0.xlsx"
+        book = openpyxl.Workbook()
+        sheet = book.active
+        sheet.title = "01-MX"
+        sheet.sheet_format.defaultColWidth = 1.6
+        sheet.column_dimensions["F"].width = 40
+        for column, name in {8: "代号", 9: "名称", 39: "数量", 43: "备注", 47: "更改"}.items():
+            sheet.cell(2, column, name)
+        sheet["F4"] = "整件"
+        sheet["F4"].font = Font(italic=True)
+        sheet["H6"] = "M001"
+        sheet["I6"] = "测试物料"
+        sheet["AM6"] = 3
+        book.save(source)
+
+        generate_difference(source, target)
+        result = openpyxl.load_workbook(target)["机柜差异表"]
+        assert result.column_dimensions.get("A") is None
+        assert result.sheet_format.defaultColWidth == 1.6
+
+
 if __name__ == '__main__':
     test_sample()
+    test_xlsx_keeps_original_layout_path()
     print('差异表检查通过')
