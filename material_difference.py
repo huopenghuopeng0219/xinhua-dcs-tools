@@ -8,7 +8,7 @@ import re
 
 import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Protection, Side
-from openpyxl.utils import get_column_letter
+from openpyxl.utils import column_index_from_string, get_column_letter
 
 
 def output_path_for(source, output_dir=None):
@@ -78,19 +78,27 @@ def _copy_style(old, new):
 
 
 def _copy_column_dimensions(source, target, first_column, last_column, column_offset):
-    """复制模板列宽；差异表删除 A:E 后把 F:BE 平移到 A:AZ。"""
+    """复制单列或整段列宽；删除 A:E 后把 F:BD 平移到 A:AY。"""
     target.sheet_format.baseColWidth = source.sheet_format.baseColWidth
     target.sheet_format.defaultColWidth = source.sheet_format.defaultColWidth
-    for old_column in range(first_column, last_column + 1):
-        old_letter = get_column_letter(old_column)
-        old_dimension = source.column_dimensions.get(old_letter)
-        if old_dimension is None:
+    for old_dimension in source.column_dimensions.values():
+        old_start = old_dimension.min or column_index_from_string(old_dimension.index)
+        old_end = old_dimension.max or old_start
+        start = max(first_column, old_start)
+        end = min(last_column, old_end)
+        if start > end:
             continue
-        new_letter = get_column_letter(old_column + column_offset)
+        new_start = start + column_offset
+        new_end = end + column_offset
+        new_letter = get_column_letter(new_start)
         new_dimension = target.column_dimensions[new_letter]
+        new_dimension.min = new_start
+        new_dimension.max = new_end
         new_dimension.width = old_dimension.width
         new_dimension.hidden = old_dimension.hidden
         new_dimension.bestFit = old_dimension.bestFit
+        new_dimension.outlineLevel = old_dimension.outlineLevel
+        new_dimension.collapsed = old_dimension.collapsed
 
 
 def _xls_color(book, index):
@@ -270,8 +278,7 @@ def generate_difference(source_path, output_path=None):
     sheet.page_setup = copy(template.page_setup)
     sheet.sheet_view.view = "normal"
     sheet.sheet_view.showGridLines = True
-    if source_path.suffix.lower() == ".xls":
-        _copy_column_dimensions(template, sheet, 6, 56, shift)
+    _copy_column_dimensions(template, sheet, 6, 56, shift)
 
     _copy_rows(template, sheet, 2, 3, 2, 6, 56, shift)
     title_stem = source_path.stem.replace("机柜设计", "差异表", 1)

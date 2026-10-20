@@ -71,15 +71,17 @@ def test_sample():
 
 
 
-def test_xlsx_keeps_original_layout_path():
+def test_xlsx_copies_grouped_column_widths():
     with TemporaryDirectory(dir=Path(__file__).parent) as directory:
         source = Path(directory) / "测试项目-机柜设计-V0.xlsx"
         target = Path(directory) / "测试项目-差异表-V0.xlsx"
         book = openpyxl.Workbook()
         sheet = book.active
         sheet.title = "01-MX"
-        sheet.sheet_format.defaultColWidth = 1.6
-        sheet.column_dimensions["F"].width = 40
+        sheet.sheet_format.defaultColWidth = 8.66666666666667
+        sheet.column_dimensions["A"].width = 1.625
+        sheet.column_dimensions["A"].min = 1
+        sheet.column_dimensions["A"].max = 16384
         for column, name in {8: "代号", 9: "名称", 39: "数量", 43: "备注", 47: "更改"}.items():
             sheet.cell(2, column, name)
         sheet["F4"] = "整件"
@@ -91,11 +93,13 @@ def test_xlsx_keeps_original_layout_path():
 
         generate_difference(source, target)
         result = openpyxl.load_workbook(target)["机柜差异表"]
-        assert result.column_dimensions.get("A") is None
-        assert result.sheet_format.defaultColWidth == 1.6
+        dimension = result.column_dimensions["A"]
+        assert (dimension.min, dimension.max) == (1, 51)
+        assert dimension.width == 1.625
+        assert result.sheet_format.defaultColWidth == 8.66666666666667
 
 
 if __name__ == '__main__':
     test_sample()
-    test_xlsx_keeps_original_layout_path()
+    test_xlsx_copies_grouped_column_widths()
     print('差异表检查通过')

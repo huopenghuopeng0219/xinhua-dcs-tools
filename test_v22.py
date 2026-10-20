@@ -19,7 +19,7 @@ def test_v22():
 
     qt_app = QApplication.instance() or QApplication([])
     window = app_module.MainWindow()
-    assert window.windowTitle() == "新华DCS辅助器 V2.2.4"
+    assert window.windowTitle() == "新华DCS辅助器 V2.2.5"
     assert [button.text() for button in window.func_group.buttons()] == [
         "生成接线总表", "生成转组态", "生成差异表"
     ]
@@ -34,4 +34,4 @@ def test_v22():
 
 if __name__ == "__main__":
     test_v22()
-    print("V2.2.4 检查通过")
+    print("V2.2.5 检查通过")
